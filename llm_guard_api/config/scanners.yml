@@ -13,7 +13,7 @@ rate_limit:
 
 auth:
  type: http_bearer
- token: ${AUTH_TOKEN:}
+ token: ${AUTH_TOKEN:bearer-token}
 
 tracing:
   exporter: ${TRACING_EXPORTER:console}

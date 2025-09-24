@@ -30,6 +30,7 @@ WORKDIR $HOME/app
 # Copy pyproject.toml and other necessary files for installation
 COPY --chown=user:user pyproject.toml ./
 COPY --chown=user:user app ./app
+COPY --chown=user:user models ./models
 
 # Install the project's dependencies
 RUN pip install --no-cache-dir --upgrade pip && \

@@ -28,6 +28,9 @@ from llm_guard.input_scanners.base import Scanner as InputScanner
 from llm_guard.output_scanners.base import Scanner as OutputScanner
 from llm_guard.vault import Vault
 
+from llm_guard.input_scanners import Anonymize
+from llm_guard.input_scanners.anonymize_helpers import BERT_ZH_NER_CONF, MDEBERTA_AI4PRIVACY_v2_CONF
+
 from .config import AuthConfig, Config, get_config
 from .otel import configure_otel, instrument_app
 from .scanner import (
@@ -458,6 +461,127 @@ def register_routes(
         )
 
         return response
+    
+    @app.post(
+        "/uni/scan/prompt",
+        tags=["Analyze"],
+        response_model=AnalyzePromptResponse,
+        status_code=status.HTTP_200_OK,
+        description="Analyze a prompt and return the sanitized prompt",
+    )
+    async def submit_uni_analyze_prompt(
+        request: AnalyzePromptRequest,
+        _: Annotated[bool, Depends(check_auth)],
+        response: Response,
+        # input_scanners: List[InputScanner] = Depends(input_scanners_func),
+    ) -> AnalyzePromptResponse:
+        LOGGER.debug("Received analyze prompt request", request_prompt=request.prompt)
+
+        result_is_valid = True
+        results_score = {}
+
+        start_time = time.time()
+
+        # --- 1. 创建共享的 Vault ---
+        vault = Vault()
+
+        # --- 2. 定义自定义规则 ---
+        # 将所有自定义规则放在一起定义，便于管理
+        # （虽然可以分开，但放一起更清晰）
+        all_custom_regex_patterns = [
+            # --- 通用高优先级规则 ---
+            # 香港身份证号码
+            {
+                "name": "HK_ID_CARD",
+                "expressions": [r"[A-Z]{1,2}\d{6}\(\w\)"],
+                "examples": ["A123456(7)", "AB987654(3)", "W123456(A)", "Z987654(3)"],
+                "context": ["hk", "hkid", "id", "身份证", "香港身份证", "HKID", "Hong Kong ID"],
+                "score": 0.95,
+                "languages": ["zh", "en"]
+            },
+            # 中国手机号码 (通用)
+            {
+                "name": "CN_PHONE_NUMBER_CUSTOM",
+                "expressions": [r"1[3-9]\d{9}"],
+                "examples": ["13800138000", "18688818888"],
+                "context": ["phone", "电话", "mobile"],
+                "score": 0.9,
+                "languages": ["zh", "en"]
+            },
+            # 中国大陆 18 位居民身份证号码 (通用)
+            {
+                "name": "CN_ID_CARD",
+                "expressions": [r"\b\d{17}[\dX]\b"], # 使用 \b 更健壮
+                "examples": ["110101199001011234", "441900198888888888", "12345678901234567X"],
+                "context": ["身份证", "居民身份证", "ID card", "ID", "id number", "id_card"],
+                "score": 0.98,
+                "languages": ["zh", "en"]
+            }
+        ]
+
+        BERT_ZH_NER_CONF["DEFAULT_MODEL"].path = "./models/bert-base-chinese-finetuned-ner"
+        BERT_ZH_NER_CONF["DEFAULT_MODEL"].kwargs["local_files_only"] = True
+        # --- 3. 创建针对中文的 Scanner ---
+        scanner_zh = Anonymize(
+            vault, # 使用共享的 vault
+            recognizer_conf=BERT_ZH_NER_CONF, # 使用中文 NER 模型
+            entity_types=[
+                'HK_ID_CARD',        # 自定义
+                'CN_PHONE_NUMBER_CUSTOM', # 自定义
+                'CN_ID_CARD',        # 自定义
+                'PERSON',            # 中文模型擅长
+                'LOCATION',          # 中文模型擅长
+                'ORGANIZATION'       # 中文模型擅长
+                # 根据需要可以添加其他默认类型
+            ],
+            regex_patterns=all_custom_regex_patterns,
+            # language="zh" # 通常不需要，模型本身是中文的
+        )
+
+        # --- 4. 创建针对英文/多语言的 Scanner ---
+        scanner_en = Anonymize(
+            vault, # 使用同一个共享的 vault
+            recognizer_conf=MDEBERTA_AI4PRIVACY_v2_CONF, # 使用多语言 MdeBERTa 模型
+            entity_types=[
+                'HK_ID_CARD',        # 自定义 (仍然需要，因为文本会被传递)
+                'CN_PHONE_NUMBER_CUSTOM', # 自定义 (仍然需要)
+                'CN_ID_CARD',        # 自定义 (仍然需要)
+                'PERSON',            # MdeBERTa 擅长英文人名
+                'EMAIL_ADDRESS',     # MdeBERTa 擅长
+                'PHONE_NUMBER',      # MdeBERTa 擅长 (可能与自定义规则互补)
+                'CREDIT_CARD',       # MdeBERTa 擅长
+                'CRYPTO',            # MdeBERTa 擅长
+                'DATE_TIME',         # MdeBERTa 擅长
+                'IBAN_CODE',         # MdeBERTa 擅长
+                'IP_ADDRESS',        # MdeBERTa 擅长
+                'URL'                # MdeBERTa 擅长
+                # 根据需要添加其他默认类型
+            ],
+            regex_patterns=all_custom_regex_patterns,
+            # language="en" # 通常不需要，模型本身是多语言的
+        )
+
+        results_score = {}
+
+        sanitized_prompt_step1, is_valid_1, risk_score_1 = scanner_zh.scan(request.prompt)
+        results_score["scanner_zh"] = risk_score_1
+        final_sanitized_prompt, is_valid_2, risk_score_2 = scanner_en.scan(sanitized_prompt_step1)
+        results_score["scanner_en"] = risk_score_2
+
+        response = AnalyzePromptResponse(
+            sanitized_prompt=final_sanitized_prompt,
+            is_valid=is_valid_2,
+            scanners=results_score,
+        )
+
+        elapsed_time = time.time() - start_time
+        LOGGER.debug(
+            "Sanitized prompt response returned",
+            scores=results_score,
+            elapsed_time_seconds=round(elapsed_time, 6),
+        )
+
+        return response
 
     if config.metrics and config.metrics.exporter == "prometheus":
 
@@ -493,3 +617,5 @@ def register_routes(
         return JSONResponse(
             jsonable_encoder(response), status_code=status.HTTP_422_UNPROCESSABLE_ENTITY
         )
+
+# app = create_app()
