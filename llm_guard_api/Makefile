@@ -18,6 +18,9 @@ install:
 build-docker-multi:
 	@docker buildx build --platform linux/amd64,linux/arm64 -t $(DOCKER_IMAGE_NAME):$(VERSION) -t $(DOCKER_IMAGE_NAME):latest . --push
 
+build-docker-amd64:
+	@docker buildx build --platform linux/amd64 -t $(DOCKER_IMAGE_NAME):$(VERSION) -t $(DOCKER_IMAGE_NAME):latest . --output type=docker,dest=./$(DOCKER_IMAGE_NAME).tar
+
 build-docker-cuda-multi:
 	@docker buildx build --platform linux/amd64 -t $(DOCKER_IMAGE_NAME):$(VERSION)-cuda -t $(DOCKER_IMAGE_NAME):latest-cuda -f Dockerfile-cuda . --push
 
