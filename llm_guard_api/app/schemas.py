@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -19,6 +19,9 @@ class AnalyzePromptRequest(ScanPromptRequest):
 
 class AnalyzePromptResponse(ScanPromptResponse):
     sanitized_prompt: str = Field(title="Sanitized prompt")
+
+class UniPortalAnalyzePromptResponse(AnalyzePromptResponse):
+    sanitive_list: List[Tuple[str, str]] = Field(title="Sanitive list")
 
 
 class ScanOutputRequest(BaseModel):

@@ -50,6 +50,7 @@ from .schemas import (
     ScanOutputResponse,
     ScanPromptRequest,
     ScanPromptResponse,
+    UniPortalAnalyzePromptResponse,
 )
 from .util import configure_logger
 from .version import __version__
@@ -465,7 +466,7 @@ def register_routes(
     @app.post(
         "/uni/scan/prompt",
         tags=["Analyze"],
-        response_model=AnalyzePromptResponse,
+        response_model=UniPortalAnalyzePromptResponse,
         status_code=status.HTTP_200_OK,
         description="Analyze a prompt and return the sanitized prompt",
     )
@@ -474,7 +475,7 @@ def register_routes(
         _: Annotated[bool, Depends(check_auth)],
         response: Response,
         # input_scanners: List[InputScanner] = Depends(input_scanners_func),
-    ) -> AnalyzePromptResponse:
+    ) -> UniPortalAnalyzePromptResponse:
         LOGGER.debug("Received analyze prompt request", request_prompt=request.prompt)
 
         result_is_valid = True
@@ -568,10 +569,11 @@ def register_routes(
         final_sanitized_prompt, is_valid_2, risk_score_2 = scanner_en.scan(sanitized_prompt_step1)
         results_score["scanner_en"] = risk_score_2
 
-        response = AnalyzePromptResponse(
+        response = UniPortalAnalyzePromptResponse(
             sanitized_prompt=final_sanitized_prompt,
             is_valid=is_valid_2,
             scanners=results_score,
+            sanitive_list=vault.get(),
         )
 
         elapsed_time = time.time() - start_time
